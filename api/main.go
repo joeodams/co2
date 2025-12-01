@@ -1,89 +1,165 @@
 package main
 
 import (
+	"database/sql"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	_ "modernc.org/sqlite"
 )
 
 type airQualityRecord struct {
-    ID                string     `json:"id"`
-    Timestamp         time.Time  `json:"timestamp"`
-    CO2               int        `json:"co2"`
-    RelativeHumidity  float64    `json:"rh"`
-    Temperature       float64    `json:"temp"`
-    Pressure          float64    `json:"pressure"`
-}
-
-
-var testRecords = []airQualityRecord{
-    {
-        ID:        "test-001",
-        Timestamp: time.Date(2025, time.March, 10, 9, 0, 0, 0, time.UTC),
-        CO2:       742,
-        RelativeHumidity: 41.8,
-        Temperature:      20.3,
-        Pressure:         1012.4,
-    },
-    {
-        ID:        "test-002",
-        Timestamp: time.Date(2025, time.March, 10, 9, 5, 0, 0, time.UTC),
-        CO2:       815,
-        RelativeHumidity: 43.1,
-        Temperature:      20.6,
-        Pressure:         1012.1,
-    },
-    {
-        ID:        "test-003",
-        Timestamp: time.Date(2025, time.March, 10, 9, 10, 0, 0, time.UTC),
-        CO2:       689,
-        RelativeHumidity: 39.7,
-        Temperature:      20.0,
-        Pressure:         1011.9,
-    },
-    {
-        ID:        "test-004",
-        Timestamp: time.Date(2025, time.March, 10, 9, 15, 0, 0, time.UTC),
-        CO2:       902,
-        RelativeHumidity: 45.2,
-        Temperature:      21.1,
-        Pressure:         1011.7,
-    },
-    {
-        ID:        "test-005",
-        Timestamp: time.Date(2025, time.March, 10, 9, 20, 0, 0, time.UTC),
-        CO2:       621,
-        RelativeHumidity: 38.4,
-        Temperature:      19.8,
-        Pressure:         1011.5,
-    },
+	ID               string    `json:"id"`
+	Timestamp        time.Time `json:"timestamp"`
+	CO2              int       `json:"co2"`
+	RelativeHumidity float64   `json:"rh"`
+	Temperature      float64   `json:"temp"`
+	Pressure         float64   `json:"pressure"`
 }
 
 func main() {
-    router := gin.Default()
-    router.GET("/records", getAirQualityRecords)
-    router.POST("/records", postAirQualityRecords)
+	db, err := sql.Open("sqlite", "airquality.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
 
-    router.Run("localhost:8080")
+	if err := initDB(db); err != nil {
+		log.Fatal(err)
+	}
+
+	router := gin.Default()
+	router.GET("/records/last-month", getLastMonthRecordsHandler(db))
+	router.GET("/records", getAirQualityRecordsHandler(db))
+	router.POST("/records", postAirQualityRecordsHandler(db))
+
+	if err := router.Run("localhost:8080"); err != nil {
+		log.Fatal(err)
+	}
 }
 
-// getAirQualityRecords responds with the list of all air quality records as JSON.
-func getAirQualityRecords(c *gin.Context) {
-    c.IndentedJSON(http.StatusOK, testRecords)
+func initDB(db *sql.DB) error {
+	const schema = `
+CREATE TABLE IF NOT EXISTS air_quality_records (
+    id        TEXT PRIMARY KEY,
+    timestamp TEXT NOT NULL,
+    co2       INTEGER NOT NULL,
+    rh        REAL NOT NULL,
+    temp      REAL NOT NULL,
+    pressure  REAL NOT NULL
+);`
+
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-// postAirQualityRecords adds an air quality record from JSON received in the request body.
-func postAirQualityRecords(c *gin.Context) {
-    var newAirQualityRecord airQualityRecord
+func getLastMonthRecordsHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Last 30 days; swap to AddDate(0, -1, 0) if you want calendar month.
+		cutoff := time.Now().AddDate(0, 0, -30).UTC().Format(time.RFC3339)
 
-    // Call BindJSON to bind the received JSON to
-    // newAlbum.
-    if err := c.BindJSON(&newAirQualityRecord); err != nil {
-        return
-    }
+		rows, err := db.Query(`
+			SELECT id, timestamp, co2, rh, temp, pressure
+			FROM air_quality_records
+			WHERE timestamp >= ?
+			ORDER BY timestamp
+		`, cutoff)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
 
-    // Add the new album to the slice.
-    testRecords = append(testRecords, newAirQualityRecord)
-    c.IndentedJSON(http.StatusCreated, newAirQualityRecord)
+		var records []airQualityRecord
+
+		for rows.Next() {
+			var r airQualityRecord
+			var ts string
+
+			if err := rows.Scan(&r.ID, &ts, &r.CO2, &r.RelativeHumidity, &r.Temperature, &r.Pressure); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			r.Timestamp, err = time.Parse(time.RFC3339, ts)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			records = append(records, r)
+		}
+		if err := rows.Err(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.IndentedJSON(http.StatusOK, records)
+	}
+}
+
+func getAirQualityRecordsHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rows, err := db.Query(`SELECT id, timestamp, co2, rh, temp, pressure FROM air_quality_records`)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+
+		var records []airQualityRecord
+
+		for rows.Next() {
+			var r airQualityRecord
+			var ts string
+
+			if err := rows.Scan(&r.ID, &ts, &r.CO2, &r.RelativeHumidity, &r.Temperature, &r.Pressure); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			r.Timestamp, err = time.Parse(time.RFC3339, ts)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			records = append(records, r)
+		}
+		if err := rows.Err(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.IndentedJSON(http.StatusOK, records)
+	}
+}
+
+func postAirQualityRecordsHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var r airQualityRecord
+
+		if err := c.BindJSON(&r); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		ts := r.Timestamp.UTC().Format(time.RFC3339) // "2025-03-10T09:25:00Z"
+
+		_, err := db.Exec(
+			`INSERT INTO air_quality_records (id, timestamp, co2, rh, temp, pressure)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			r.ID, ts, r.CO2, r.RelativeHumidity, r.Temperature, r.Pressure,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.IndentedJSON(http.StatusCreated, r)
+	}
 }
