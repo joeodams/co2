@@ -1,6 +1,11 @@
 #include <Arduino.h>
 #include <SensirionI2cScd4x.h>
 #include <Wire.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
+#include "secrets.h"
 
 // --- NEW: OLED includes ---
 #include <Adafruit_GFX.h>
@@ -29,11 +34,241 @@ static int16_t error;
 #define SCREEN_HEIGHT 64
 // Reset pin is often not connected on I2C OLEDs; use -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+const bool ALLOW_INSECURE_TLS = true;
+const unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
+const unsigned long UPLOAD_INTERVAL_MS = 60000;
+const int MAX_NETWORKS_TO_LOG = 10;
+
+unsigned long lastUploadAttemptMs = 0;
+bool wifiConnectionStarted = false;
+char uploadStatusLine[24] = "Up: idle";
 
 void PrintUint64(uint64_t& value) {
     Serial.print("0x");
     Serial.print((uint32_t)(value >> 32), HEX);
     Serial.print((uint32_t)(value & 0xFFFFFFFF), HEX);
+}
+
+const char* wifiStatusToString(wl_status_t status) {
+    switch (status) {
+        case WL_NO_SHIELD:
+            return "NO_SHIELD";
+        case WL_IDLE_STATUS:
+            return "IDLE";
+        case WL_NO_SSID_AVAIL:
+            return "NO_SSID_AVAIL";
+        case WL_SCAN_COMPLETED:
+            return "SCAN_COMPLETED";
+        case WL_CONNECTED:
+            return "CONNECTED";
+        case WL_CONNECT_FAILED:
+            return "CONNECT_FAILED";
+        case WL_CONNECTION_LOST:
+            return "CONNECTION_LOST";
+        case WL_DISCONNECTED:
+            return "DISCONNECTED";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+bool wifiNeedsNewBegin(wl_status_t status) {
+    return status == WL_NO_SSID_AVAIL ||
+           status == WL_CONNECT_FAILED ||
+           status == WL_CONNECTION_LOST ||
+           status == WL_DISCONNECTED;
+}
+
+void logWifiCredentials() {
+    Serial.print("WiFi SSID: ");
+    Serial.println(WIFI_SSID);
+    Serial.print("WiFi password: ");
+    Serial.println(WIFI_PASSWORD);
+}
+
+void printVisibleNetworks() {
+    Serial.println("Scanning for nearby WiFi networks...");
+
+    int networkCount = WiFi.scanNetworks(false, true);
+    if (networkCount <= 0) {
+        Serial.println("No WiFi networks found");
+        WiFi.scanDelete();
+        return;
+    }
+
+    Serial.print("Nearby WiFi networks: ");
+    Serial.println(networkCount);
+
+    int networksToLog = networkCount < MAX_NETWORKS_TO_LOG ? networkCount : MAX_NETWORKS_TO_LOG;
+    for (int i = 0; i < networksToLog; ++i) {
+        String ssid = WiFi.SSID(i);
+        if (ssid.length() == 0) {
+            ssid = "<hidden>";
+        }
+
+        Serial.print("  ");
+        Serial.print(i + 1);
+        Serial.print(": ");
+        Serial.print(ssid);
+        Serial.print(" RSSI=");
+        Serial.print(WiFi.RSSI(i));
+        Serial.print(" dBm channel=");
+        Serial.println(WiFi.channel(i));
+    }
+
+    if (networkCount > networksToLog) {
+        Serial.println("  ...");
+    }
+
+    WiFi.scanDelete();
+}
+
+void startWifiConnection() {
+    Serial.println("Starting WiFi connection");
+    logWifiCredentials();
+
+    WiFi.persistent(false);
+    WiFi.setAutoReconnect(true);
+    WiFi.disconnect(true, true);
+    delay(100);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    delay(100);
+    WiFi.setSleep(false);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    wifiConnectionStarted = true;
+}
+
+bool ensureWifiConnected(unsigned long timeoutMs) {
+    wl_status_t status = WiFi.status();
+    if (status == WL_CONNECTED) {
+        return true;
+    }
+
+    if (!wifiConnectionStarted || wifiNeedsNewBegin(status)) {
+        if (wifiConnectionStarted) {
+            Serial.print("Restarting WiFi after status: ");
+            Serial.println(wifiStatusToString(status));
+        }
+        startWifiConnection();
+    } else {
+        Serial.print("WiFi still connecting, status: ");
+        Serial.println(wifiStatusToString(status));
+    }
+
+    unsigned long startedAt = millis();
+    wl_status_t lastLoggedStatus = WiFi.status();
+    while ((status = WiFi.status()) != WL_CONNECTED && millis() - startedAt < timeoutMs) {
+        if (status != lastLoggedStatus) {
+            Serial.print("WiFi status: ");
+            Serial.println(wifiStatusToString(status));
+            lastLoggedStatus = status;
+        }
+        delay(250);
+    }
+
+    status = WiFi.status();
+    if (status == WL_CONNECTED) {
+        return true;
+    }
+
+    Serial.print("WiFi connect timed out, final status: ");
+    Serial.println(wifiStatusToString(status));
+    if (status == WL_NO_SSID_AVAIL) {
+        printVisibleNetworks();
+    }
+    WiFi.disconnect(true, false);
+    wifiConnectionStarted = false;
+    return false;
+}
+
+bool shouldUploadNow() {
+    if (lastUploadAttemptMs == 0) {
+        return true;
+    }
+
+    return millis() - lastUploadAttemptMs >= UPLOAD_INTERVAL_MS;
+}
+
+void setUploadStatus(const char* status) {
+    snprintf(uploadStatusLine, sizeof(uploadStatusLine), "%s", status);
+}
+
+bool uploadReading(uint16_t co2Concentration,
+                   float temperature,
+                   float relativeHumidity,
+                   bool hasPressure,
+                   float pressure_hPa) {
+
+    if (!ensureWifiConnected(WIFI_CONNECT_TIMEOUT_MS)) {
+        setUploadStatus("Up: WiFi down");
+        return false;
+    }
+
+    HTTPClient http;
+    WiFiClient plainClient;
+    WiFiClientSecure secureClient;
+    const bool useTls = strncmp(API_URL, "https://", 8) == 0;
+
+    if (useTls) {
+        if (ALLOW_INSECURE_TLS) {
+            // Fine for bring-up; swap to setCACert() when you want proper verification.
+            secureClient.setInsecure();
+        }
+
+        if (!http.begin(secureClient, API_URL)) {
+            setUploadStatus("Up: begin fail");
+            return false;
+        }
+    } else {
+        if (!http.begin(plainClient, API_URL)) {
+            setUploadStatus("Up: begin fail");
+            return false;
+        }
+    }
+
+    http.setTimeout(10000);
+    http.addHeader("Content-Type", "application/json");
+    if (strlen(API_KEY) > 0) {
+        http.addHeader("X-API-Key", API_KEY);
+    }
+
+    char payload[160];
+    if (hasPressure) {
+        snprintf(payload,
+                 sizeof(payload),
+                 "{\"co2\":%u,\"temp\":%.2f,\"rh\":%.2f,\"pressure\":%.2f}",
+                 co2Concentration,
+                 temperature,
+                 relativeHumidity,
+                 pressure_hPa);
+    } else {
+        snprintf(payload,
+                 sizeof(payload),
+                 "{\"co2\":%u,\"temp\":%.2f,\"rh\":%.2f}",
+                 co2Concentration,
+                 temperature,
+                 relativeHumidity);
+    }
+
+    int statusCode = http.POST((uint8_t*)payload, strlen(payload));
+    String responseBody = http.getString();
+    http.end();
+
+    Serial.print("Upload status: ");
+    Serial.println(statusCode);
+    if (responseBody.length() > 0) {
+        Serial.println(responseBody);
+    }
+
+    if (statusCode >= 200 && statusCode < 300) {
+        snprintf(uploadStatusLine, sizeof(uploadStatusLine), "Up: HTTP %d", statusCode);
+        return true;
+    }
+
+    snprintf(uploadStatusLine, sizeof(uploadStatusLine), "Up: HTTP %d", statusCode);
+    return false;
 }
 
 void setup() {
@@ -81,6 +316,15 @@ void setup() {
     display.display();
     // --- END OLED init ---
 
+    if (ensureWifiConnected(WIFI_CONNECT_TIMEOUT_MS)) {
+        Serial.print("WiFi connected, IP: ");
+        Serial.println(WiFi.localIP());
+        setUploadStatus("Up: ready");
+    } else {
+        Serial.println("WiFi not connected yet");
+        setUploadStatus("Up: WiFi down");
+    }
+
     uint64_t serialNumber = 0;
     delay(30);
 
@@ -112,7 +356,7 @@ void setup() {
         Serial.println(errorMessage);
         return;
     }
-    Serial.print("serial number: 0x");
+    Serial.print("serial number: ");
     PrintUint64(serialNumber);
     Serial.println();
 
@@ -126,6 +370,8 @@ void setup() {
     } else {
         display.println("BMP280 FAIL");
     }
+    display.print("WiFi: ");
+    display.println(WiFi.status() == WL_CONNECTED ? "OK" : "DOWN");
     display.display();
 }
 
@@ -198,6 +444,15 @@ void loop() {
         Serial.println(ascEnabled == 1 ? "yes" : "no");
     }
 
+    if (shouldUploadNow()) {
+        lastUploadAttemptMs = millis();
+        uploadReading(co2Concentration,
+                      temperature,
+                      relativeHumidity,
+                      bmpOk,
+                      pressure_hPa);
+    }
+
     // --- NEW: OLED output ---
     display.clearDisplay();
     display.setCursor(0, 0);
@@ -221,6 +476,9 @@ void loop() {
     } else {
         display.println("P: ---");
     }
+
+    display.print("WiFi: ");
+    display.println(WiFi.status() == WL_CONNECTED ? "OK" : "DOWN");
 
     display.display();
     // --- END OLED output ---
