@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
@@ -16,6 +17,11 @@ import (
 	"github.com/gin-gonic/gin"
 	_ "modernc.org/sqlite"
 )
+
+//go:embed static/*
+var embeddedStaticFiles embed.FS
+
+var dashboardHTML = mustReadEmbeddedFile("static/index.html")
 
 type airQualityRecord struct {
 	ID               string    `json:"id"`
@@ -44,16 +50,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	router := gin.Default()
-	router.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
-
-	records := router.Group("/")
-	records.Use(requireAPIKey(apiKey))
-	records.GET("/records/last-month", getLastMonthRecordsHandler(db))
-	records.GET("/records", getAirQualityRecordsHandler(db))
-	records.POST("/records", limitRequestBody(maxJSONBodyBytes), postAirQualityRecordsHandler(db))
+	router := newRouter(db, apiKey)
 
 	log.Printf("Using database %s", dbPath)
 	log.Printf("Listening on %s", listenAddr)
@@ -81,6 +78,32 @@ CREATE INDEX IF NOT EXISTS idx_air_quality_records_timestamp
 	}
 
 	return nil
+}
+
+func newRouter(db *sql.DB, apiKey string) *gin.Engine {
+	router := gin.Default()
+	router.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	router.GET("/", serveDashboardHandler())
+	router.GET("/favicon.ico", func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	records := router.Group("/")
+	records.Use(requireAPIKey(apiKey))
+	records.GET("/records/last-month", getLastMonthRecordsHandler(db))
+	records.GET("/records", getAirQualityRecordsHandler(db))
+	records.POST("/records", limitRequestBody(maxJSONBodyBytes), postAirQualityRecordsHandler(db))
+
+	return router
+}
+
+func serveDashboardHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", dashboardHTML)
+	}
 }
 
 func getLastMonthRecordsHandler(db *sql.DB) gin.HandlerFunc {
@@ -281,4 +304,13 @@ func getenvDefault(key string, fallback string) string {
 	}
 
 	return fallback
+}
+
+func mustReadEmbeddedFile(path string) []byte {
+	data, err := embeddedStaticFiles.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+
+	return data
 }

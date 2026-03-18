@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CO2 Station</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f1e8;
+      --panel: rgba(255, 252, 245, 0.86);
+      --border: rgba(20, 54, 84, 0.12);
+      --ink: #17324d;
+      --muted: #5e6f80;
+      --co2: #d95f02;
+      --temp: #1f78b4;
+      --rh: #2a9d8f;
+      --pressure: #7a5cff;
+      --accent: #f3b44f;
+      --shadow: 0 22px 55px rgba(30, 42, 56, 0.14);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Aptos", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(243, 180, 79, 0.35), transparent 28rem),
+        radial-gradient(circle at top right, rgba(42, 157, 143, 0.18), transparent 22rem),
+        linear-gradient(180deg, #f9f4eb 0%, var(--bg) 100%);
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 2rem 1rem 3rem;
+    }
+
+    .hero {
+      display: grid;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+      align-items: end;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(2.2rem, 4vw, 4rem);
+      line-height: 0.96;
+      letter-spacing: -0.03em;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 48rem;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .controls {
+      padding: 1rem;
+      display: grid;
+      gap: 0.75rem;
+    }
+
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    label {
+      display: grid;
+      gap: 0.35rem;
+      flex: 1 1 18rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    input, select, button {
+      font: inherit;
+      border-radius: 14px;
+      border: 1px solid rgba(23, 50, 77, 0.18);
+      padding: 0.8rem 0.95rem;
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--ink);
+    }
+
+    button {
+      cursor: pointer;
+      min-width: 8rem;
+      background: linear-gradient(135deg, #17324d, #2b5d85);
+      color: white;
+      border: none;
+      box-shadow: 0 14px 28px rgba(23, 50, 77, 0.18);
+    }
+
+    button.secondary {
+      background: rgba(23, 50, 77, 0.08);
+      color: var(--ink);
+      box-shadow: none;
+      border: 1px solid rgba(23, 50, 77, 0.12);
+    }
+
+    .status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .status strong {
+      color: var(--ink);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin: 1.5rem 0;
+    }
+
+    .stat {
+      padding: 1rem;
+    }
+
+    .stat h2 {
+      margin: 0 0 0.35rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    .stat p {
+      margin: 0;
+      font-size: clamp(1.6rem, 2.5vw, 2.2rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    .charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+
+    .chart-card {
+      padding: 1rem;
+      display: grid;
+      gap: 0.75rem;
+    }
+
+    .chart-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+    }
+
+    .chart-title {
+      display: grid;
+      gap: 0.1rem;
+    }
+
+    .chart-title h2 {
+      margin: 0;
+      font-size: 1.1rem;
+    }
+
+    .chart-title span {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .chart-value {
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+
+    .chart-shell {
+      position: relative;
+      border-radius: 20px;
+      padding: 0.6rem;
+      background: linear-gradient(180deg, rgba(255,255,255,0.65), rgba(255,255,255,0.28));
+      border: 1px solid rgba(23, 50, 77, 0.08);
+    }
+
+    .chart-shell svg {
+      width: 100%;
+      height: 180px;
+      display: block;
+      overflow: visible;
+    }
+
+    .axis {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .empty {
+      padding: 2rem;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    .footer-note {
+      margin-top: 1.25rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 720px) {
+      main {
+        padding: 1.25rem 0.75rem 2rem;
+      }
+
+      .hero h1 {
+        font-size: 2.25rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <h1>CO2 Station</h1>
+      <p>A quick-look dashboard for your home air readings. Drop in your API key, pick a time window, and the page will pull the latest measurements directly from the Go service.</p>
+    </section>
+
+    <section class="panel controls">
+      <div class="control-row">
+        <label>
+          API key
+          <input id="apiKey" type="password" placeholder="Paste X-API-Key">
+        </label>
+        <label style="max-width: 12rem;">
+          Window
+          <select id="window">
+            <option value="month">Last 30 days</option>
+            <option value="day">Last 24 hours</option>
+            <option value="week">Last 7 days</option>
+          </select>
+        </label>
+      </div>
+      <div class="control-row">
+        <button id="loadButton" type="button">Load charts</button>
+        <button id="saveButton" class="secondary" type="button">Remember key</button>
+        <button id="clearButton" class="secondary" type="button">Forget key</button>
+      </div>
+      <div class="status" id="statusLine">
+        <strong>Status:</strong> Waiting for a request.
+      </div>
+    </section>
+
+    <section class="stats" id="stats"></section>
+    <section class="charts" id="charts"></section>
+    <p class="footer-note">Read endpoints require the same API key as uploads, so the key stays in your browser and is sent as an <code>X-API-Key</code> header.</p>
+  </main>
+
+  <script>
+    const apiKeyInput = document.getElementById("apiKey");
+    const windowInput = document.getElementById("window");
+    const loadButton = document.getElementById("loadButton");
+    const saveButton = document.getElementById("saveButton");
+    const clearButton = document.getElementById("clearButton");
+    const statusLine = document.getElementById("statusLine");
+    const statsContainer = document.getElementById("stats");
+    const chartsContainer = document.getElementById("charts");
+    const storageKey = "co2-dashboard-api-key";
+
+    const chartDefinitions = [
+      { key: "co2", label: "CO2", unit: "ppm", color: getCss("--co2") },
+      { key: "temp", label: "Temperature", unit: "C", color: getCss("--temp") },
+      { key: "rh", label: "Humidity", unit: "%", color: getCss("--rh") },
+      { key: "pressure", label: "Pressure", unit: "hPa", color: getCss("--pressure") }
+    ];
+
+    const storedKey = window.localStorage.getItem(storageKey);
+    if (storedKey) {
+      apiKeyInput.value = storedKey;
+    }
+
+    loadButton.addEventListener("click", () => loadData());
+    saveButton.addEventListener("click", () => {
+      window.localStorage.setItem(storageKey, apiKeyInput.value.trim());
+      setStatus("API key saved in this browser.", "ok");
+    });
+    clearButton.addEventListener("click", () => {
+      window.localStorage.removeItem(storageKey);
+      apiKeyInput.value = "";
+      setStatus("Stored API key removed.", "ok");
+    });
+    apiKeyInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        loadData();
+      }
+    });
+    windowInput.addEventListener("change", () => {
+      if (apiKeyInput.value.trim()) {
+        loadData();
+      }
+    });
+
+    if (storedKey) {
+      loadData();
+    } else {
+      renderEmpty("Add your API key to load charts.");
+    }
+
+    async function loadData() {
+      const apiKey = apiKeyInput.value.trim();
+      if (!apiKey) {
+        renderEmpty("Add your API key to load charts.");
+        setStatus("Add the API key from your VPS config first.", "warn");
+        return;
+      }
+
+      setStatus("Loading readings...", "loading");
+      const endpoint = windowInput.value === "month" ? "/records/last-month" : "/records";
+
+      try {
+        const response = await fetch(endpoint, {
+          headers: {
+            "X-API-Key": apiKey
+          }
+        });
+
+        if (response.status === 401) {
+          renderEmpty("The API key was rejected.");
+          setStatus("Unauthorized. Double-check the API key.", "error");
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error("API returned HTTP " + response.status);
+        }
+
+        let rows = await response.json();
+        if (!Array.isArray(rows)) {
+          rows = [];
+        }
+
+        const filteredRows = filterRowsForWindow(rows, windowInput.value);
+        renderDashboard(filteredRows);
+        setStatus("Loaded " + filteredRows.length + " readings.", "ok");
+      } catch (error) {
+        renderEmpty("Could not load data right now.");
+        setStatus(error.message, "error");
+      }
+    }
+
+    function filterRowsForWindow(rows, windowValue) {
+      const cutoffMs = {
+        day: 24 * 60 * 60 * 1000,
+        week: 7 * 24 * 60 * 60 * 1000,
+        month: 30 * 24 * 60 * 60 * 1000
+      }[windowValue] || (30 * 24 * 60 * 60 * 1000);
+
+      const cutoff = Date.now() - cutoffMs;
+      return rows.filter((row) => Date.parse(row.timestamp) >= cutoff);
+    }
+
+    function renderDashboard(rows) {
+      if (!rows.length) {
+        renderEmpty("No readings found for that time window yet.");
+        statsContainer.innerHTML = "";
+        return;
+      }
+
+      const latest = rows[rows.length - 1];
+      statsContainer.innerHTML = [
+        renderStat("Latest CO2", formatValue(latest.co2, "ppm")),
+        renderStat("Temperature", formatValue(latest.temp, "C")),
+        renderStat("Humidity", formatValue(latest.rh, "%")),
+        renderStat("Pressure", latest.pressure ? formatValue(latest.pressure, "hPa") : "n/a"),
+        renderStat("Samples", String(rows.length)),
+        renderStat("Last sample", formatTimestamp(latest.timestamp))
+      ].join("");
+
+      chartsContainer.innerHTML = chartDefinitions.map((definition) => {
+        const points = rows
+          .map((row) => ({ time: Date.parse(row.timestamp), value: Number(row[definition.key]) }))
+          .filter((point) => Number.isFinite(point.value))
+          .filter((point) => definition.key !== "pressure" || point.value > 0);
+
+        return renderChartCard(definition, points);
+      }).join("");
+    }
+
+    function renderStat(label, value) {
+      return `
+        <article class="panel stat">
+          <h2>${escapeHtml(label)}</h2>
+          <p>${escapeHtml(value)}</p>
+        </article>
+      `;
+    }
+
+    function renderChartCard(definition, points) {
+      if (!points.length) {
+        return `
+          <article class="panel chart-card">
+            <div class="chart-head">
+              <div class="chart-title">
+                <h2>${escapeHtml(definition.label)}</h2>
+                <span>No data in this window</span>
+              </div>
+            </div>
+            <div class="empty">Waiting for readings.</div>
+          </article>
+        `;
+      }
+
+      const path = buildPath(points);
+      const values = points.map((point) => point.value);
+      const latest = points[points.length - 1];
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+
+      return `
+        <article class="panel chart-card">
+          <div class="chart-head">
+            <div class="chart-title">
+              <h2>${escapeHtml(definition.label)}</h2>
+              <span>${escapeHtml(formatTimestamp(latest.time))}</span>
+            </div>
+            <div class="chart-value">${escapeHtml(formatValue(latest.value, definition.unit))}</div>
+          </div>
+          <div class="chart-shell">
+            <svg viewBox="0 0 320 180" preserveAspectRatio="none" aria-label="${escapeHtml(definition.label)} chart">
+              <line x1="0" y1="160" x2="320" y2="160" stroke="rgba(23,50,77,0.12)" stroke-width="1" />
+              <line x1="0" y1="100" x2="320" y2="100" stroke="rgba(23,50,77,0.08)" stroke-width="1" />
+              <line x1="0" y1="40" x2="320" y2="40" stroke="rgba(23,50,77,0.08)" stroke-width="1" />
+              <path d="${path.area}" fill="${definition.color}18"></path>
+              <path d="${path.line}" fill="none" stroke="${definition.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+          <div class="axis">
+            <span>Min ${escapeHtml(formatValue(min, definition.unit))}</span>
+            <span>Max ${escapeHtml(formatValue(max, definition.unit))}</span>
+          </div>
+        </article>
+      `;
+    }
+
+    function buildPath(points) {
+      const width = 320;
+      const height = 160;
+      const values = points.map((point) => point.value);
+      const times = points.map((point) => point.time);
+      const minValue = Math.min(...values);
+      const maxValue = Math.max(...values);
+      const minTime = Math.min(...times);
+      const maxTime = Math.max(...times);
+      const valueRange = maxValue - minValue || 1;
+      const timeRange = maxTime - minTime || 1;
+
+      const coords = points.map((point) => {
+        const x = ((point.time - minTime) / timeRange) * width;
+        const y = height - (((point.value - minValue) / valueRange) * (height - 12)) - 6;
+        return [Number(x.toFixed(2)), Number(y.toFixed(2))];
+      });
+
+      const line = coords.map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x} ${y}`).join(" ");
+      const area = `${line} L ${width} ${height} L 0 ${height} Z`;
+
+      return { line, area };
+    }
+
+    function renderEmpty(message) {
+      chartsContainer.innerHTML = `<article class="panel empty">${escapeHtml(message)}</article>`;
+    }
+
+    function setStatus(message, tone) {
+      const colors = {
+        ok: getCss("--rh"),
+        warn: getCss("--accent"),
+        error: getCss("--co2"),
+        loading: getCss("--temp")
+      };
+
+      statusLine.innerHTML = `<strong style="color:${colors[tone] || getCss("--ink")}">Status:</strong> ${escapeHtml(message)}`;
+    }
+
+    function formatValue(value, unit) {
+      if (!Number.isFinite(value)) {
+        return "n/a";
+      }
+
+      const digits = value >= 100 ? 0 : 1;
+      return `${value.toFixed(digits)} ${unit}`;
+    }
+
+    function formatTimestamp(timestamp) {
+      const date = new Date(timestamp);
+      return date.toLocaleString(undefined, {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    }
+
+    function getCss(name) {
+      return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+  </script>
+</body>
+</html>

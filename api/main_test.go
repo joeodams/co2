@@ -19,8 +19,7 @@ func TestPostAirQualityRecordDefaults(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
-	router := gin.New()
-	router.POST("/records", postAirQualityRecordsHandler(db))
+	router := newRouter(db, "")
 
 	req := httptest.NewRequest(
 		http.MethodPost,
@@ -139,8 +138,7 @@ func TestPostAirQualityRecordRejectsInvalidPayload(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
-	router := gin.New()
-	router.POST("/records", postAirQualityRecordsHandler(db))
+	router := newRouter(db, "")
 
 	req := httptest.NewRequest(
 		http.MethodPost,
@@ -154,6 +152,26 @@ func TestPostAirQualityRecordRejectsInvalidPayload(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDashboardServesHTML(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := openTestDB(t)
+	defer db.Close()
+
+	router := newRouter(db, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "CO2 Station") {
+		t.Fatalf("expected dashboard HTML, got %q", recorder.Body.String())
 	}
 }
 
