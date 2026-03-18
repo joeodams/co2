@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"database/sql"
 	"embed"
 	"encoding/hex"
@@ -21,7 +20,7 @@ import (
 //go:embed static/*
 var embeddedStaticFiles embed.FS
 
-var dashboardHTML = mustReadEmbeddedFile("static/index.html")
+var dashboardHTML = readGraphingHtmlFile("static/index.html")
 
 type airQualityRecord struct {
 	ID               string    `json:"id"`
@@ -39,13 +38,18 @@ func main() {
 	listenAddr := getenvDefault("CO2_LISTEN_ADDR", "localhost:8080")
 	apiKey := os.Getenv("CO2_API_KEY")
 
+	// open the sqlite DB
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// this defers closing the connection until main() returns
 	defer db.Close()
+
 	db.SetMaxOpenConns(1)
 
+	// re-initialise the DB on every startup in case we're starting the DB again
 	if err := initDB(db); err != nil {
 		log.Fatal(err)
 	}
@@ -81,21 +85,20 @@ CREATE INDEX IF NOT EXISTS idx_air_quality_records_timestamp
 }
 
 func newRouter(db *sql.DB, apiKey string) *gin.Engine {
+
+	// create a gin Engine object with default configurations
 	router := gin.Default()
+
+	// register the endpoints
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 	router.GET("/", serveDashboardHandler())
-	router.GET("/public/records", getLastMonthRecordsHandler(db))
-	router.GET("/favicon.ico", func(c *gin.Context) {
-		c.Status(http.StatusNoContent)
-	})
 
-	records := router.Group("/")
-	records.Use(requireAPIKey(apiKey))
-	records.GET("/records/last-month", getLastMonthRecordsHandler(db))
-	records.GET("/records", getAirQualityRecordsHandler(db))
-	records.POST("/records", limitRequestBody(maxJSONBodyBytes), postAirQualityRecordsHandler(db))
+	// /records api
+	records := router.Group("/records")
+	records.GET("", getLastMonthRecordsHandler(db))                                                               //this is public
+	records.POST("", requireAPIKey(apiKey), limitRequestBody(maxJSONBodyBytes), postAirQualityRecordsHandler(db)) //this is private
 
 	return router
 }
@@ -109,7 +112,6 @@ func serveDashboardHandler() gin.HandlerFunc {
 
 func getLastMonthRecordsHandler(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Last 30 days; swap to AddDate(0, -1, 0) if you want calendar month.
 		cutoff := time.Now().AddDate(0, 0, -30).UTC().Format(time.RFC3339)
 
 		rows, err := db.Query(`
@@ -130,52 +132,13 @@ func getLastMonthRecordsHandler(db *sql.DB) gin.HandlerFunc {
 			var r airQualityRecord
 			var ts string
 
+			// .scan gets the row values into an airQualityRecord obj
 			if err := rows.Scan(&r.ID, &ts, &r.CO2, &r.RelativeHumidity, &r.Temperature, &r.Pressure); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 
-			r.Timestamp, err = time.Parse(time.RFC3339, ts)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-
-			records = append(records, r)
-		}
-		if err := rows.Err(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.IndentedJSON(http.StatusOK, records)
-	}
-}
-
-func getAirQualityRecordsHandler(db *sql.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		rows, err := db.Query(`
-			SELECT id, timestamp, co2, rh, temp, pressure
-			FROM air_quality_records
-			ORDER BY timestamp
-		`)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		defer rows.Close()
-
-		var records []airQualityRecord
-
-		for rows.Next() {
-			var r airQualityRecord
-			var ts string
-
-			if err := rows.Scan(&r.ID, &ts, &r.CO2, &r.RelativeHumidity, &r.Temperature, &r.Pressure); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-
+			// parse the timestamp
 			r.Timestamp, err = time.Parse(time.RFC3339, ts)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -198,15 +161,10 @@ func postAirQualityRecordsHandler(db *sql.DB) gin.HandlerFunc {
 		var r airQualityRecord
 
 		if err := c.BindJSON(&r); err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "request body too large") {
-				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
-				return
-			}
-
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		applyRecordDefaults(&r)
+		initialiseRecord(&r)
 		if err := validateRecord(r); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -227,7 +185,7 @@ func postAirQualityRecordsHandler(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
-func applyRecordDefaults(r *airQualityRecord) {
+func initialiseRecord(r *airQualityRecord) {
 	if r.ID == "" {
 		r.ID = newRecordID()
 	}
@@ -252,16 +210,12 @@ func requireAPIKey(apiKey string) gin.HandlerFunc {
 }
 
 func isAuthorized(c *gin.Context, apiKey string) bool {
-	if apiKey == "" {
-		return true
-	}
-
 	token := strings.TrimSpace(c.GetHeader("X-API-Key"))
 	if token == "" {
 		token = strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
 	}
 
-	return subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) == 1
+	return token == apiKey
 }
 
 func limitRequestBody(maxBytes int64) gin.HandlerFunc {
@@ -271,6 +225,9 @@ func limitRequestBody(maxBytes int64) gin.HandlerFunc {
 	}
 }
 
+// sanity-check the input
+// maybe a sensor has died and is spewing crap
+// let's save ourselves a db job
 func validateRecord(r airQualityRecord) error {
 	switch {
 	case r.CO2 <= 0 || r.CO2 > 10000:
@@ -283,8 +240,6 @@ func validateRecord(r airQualityRecord) error {
 		return fmt.Errorf("pressure must be a finite number")
 	case r.Pressure != 0 && (r.Pressure < 300 || r.Pressure > 1200):
 		return fmt.Errorf("pressure must be 0 or between 300 and 1200 hPa")
-	case r.Timestamp.After(time.Now().UTC().Add(10 * time.Minute)):
-		return fmt.Errorf("timestamp cannot be more than 10 minutes in the future")
 	default:
 		return nil
 	}
@@ -307,7 +262,7 @@ func getenvDefault(key string, fallback string) string {
 	return fallback
 }
 
-func mustReadEmbeddedFile(path string) []byte {
+func readGraphingHtmlFile(path string) []byte {
 	data, err := embeddedStaticFiles.ReadFile(path)
 	if err != nil {
 		panic(err)

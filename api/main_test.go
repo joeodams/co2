@@ -79,9 +79,7 @@ func TestPostAirQualityRecordRequiresApiKeyWhenConfigured(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
-	router := gin.New()
-	router.Use(requireAPIKey("secret-key"))
-	router.POST("/records", postAirQualityRecordsHandler(db))
+	router := newRouter(db, "secret-key")
 
 	req := httptest.NewRequest(
 		http.MethodPost,
@@ -113,26 +111,7 @@ func TestPostAirQualityRecordRequiresApiKeyWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestGetRecordsRequiresApiKeyWhenConfigured(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	db := openTestDB(t)
-	defer db.Close()
-
-	router := gin.New()
-	router.Use(requireAPIKey("secret-key"))
-	router.GET("/records", getAirQualityRecordsHandler(db))
-
-	req := httptest.NewRequest(http.MethodGet, "/records", nil)
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, req)
-
-	if recorder.Code != http.StatusUnauthorized {
-		t.Fatalf("expected status %d, got %d: %s", http.StatusUnauthorized, recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestPublicRecordsDoesNotRequireApiKeyAndOnlyReturnsRecentRows(t *testing.T) {
+func TestGetRecordsIsPublicAndReturnsRecentRows(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	db := openTestDB(t)
@@ -153,7 +132,7 @@ func TestPublicRecordsDoesNotRequireApiKeyAndOnlyReturnsRecentRows(t *testing.T)
 
 	router := newRouter(db, "secret-key")
 
-	req := httptest.NewRequest(http.MethodGet, "/public/records", nil)
+	req := httptest.NewRequest(http.MethodGet, "/records", nil)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, req)
 

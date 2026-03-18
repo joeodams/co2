@@ -76,12 +76,16 @@
       align-items: center;
     }
 
-    button {
+    select, button {
       font: inherit;
       border: 1px solid var(--border);
       border-radius: 0;
       padding: 8px 10px;
       background: #ffffff;
+      color: var(--ink);
+    }
+
+    button {
       color: var(--ink);
       cursor: pointer;
       min-width: 110px;
@@ -236,12 +240,20 @@
   <main>
     <section class="title-row">
       <h1>CO2 Station</h1>
-      <p>Minimal dashboard for inspecting the last 30 days of sensor uploads.</p>
+      <p>Minimal dashboard for inspecting sensor uploads.</p>
     </section>
 
     <section class="panel controls">
       <div class="control-row">
-        <button id="loadButton" type="button">Reload last 30 days</button>
+        <label for="windowSelect" style="color: var(--muted); font-size: 0.88rem;">
+          Range
+        </label>
+        <select id="windowSelect">
+          <option value="month">Last 30 days</option>
+          <option value="week">Last 7 days</option>
+          <option value="day">Last 24 hours</option>
+        </select>
+        <button id="loadButton" type="button">Reload data</button>
       </div>
       <div class="status" id="statusLine">Status: waiting for a request.</div>
     </section>
@@ -252,6 +264,7 @@
 
   <script>
     const loadButton = document.getElementById("loadButton");
+    const windowSelect = document.getElementById("windowSelect");
     const statusLine = document.getElementById("statusLine");
     const statsContainer = document.getElementById("stats");
     const chartsContainer = document.getElementById("charts");
@@ -264,14 +277,15 @@
     ];
 
     loadButton.addEventListener("click", loadData);
+    windowSelect.addEventListener("change", loadData);
     renderEmpty("Loading readings...");
     loadData();
 
     async function loadData() {
-      setStatus("Loading public readings...");
+      setStatus("Loading readings...");
 
       try {
-        const response = await fetch("/public/records");
+        const response = await fetch("/records");
 
         if (!response.ok) {
           throw new Error("API returned HTTP " + response.status);
@@ -282,6 +296,7 @@
           rows = [];
         }
 
+        rows = filterRowsForWindow(rows, windowSelect.value);
         renderDashboard(rows);
         setStatus("Loaded " + rows.length + " readings.");
       } catch (error) {
@@ -289,6 +304,17 @@
         statsContainer.innerHTML = "";
         setStatus(error.message);
       }
+    }
+
+    function filterRowsForWindow(rows, windowValue) {
+      const cutoffMs = {
+        day: 24 * 60 * 60 * 1000,
+        week: 7 * 24 * 60 * 60 * 1000,
+        month: 30 * 24 * 60 * 60 * 1000
+      }[windowValue] || (30 * 24 * 60 * 60 * 1000);
+
+      const cutoff = Date.now() - cutoffMs;
+      return rows.filter((row) => Date.parse(row.timestamp) >= cutoff);
     }
 
     function renderDashboard(rows) {
