@@ -1,10 +1,10 @@
 package main
 
 import (
-	"embed"
 	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
+	"embed"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -86,6 +86,7 @@ func newRouter(db *sql.DB, apiKey string) *gin.Engine {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 	router.GET("/", serveDashboardHandler())
+	router.GET("/public/records", getLastMonthRecordsHandler(db))
 	router.GET("/favicon.ico", func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})

@@ -132,6 +132,49 @@ func TestGetRecordsRequiresApiKeyWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestPublicRecordsDoesNotRequireApiKeyAndOnlyReturnsRecentRows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := openTestDB(t)
+	defer db.Close()
+
+	oldTimestamp := time.Now().UTC().AddDate(0, 0, -31).Format(time.RFC3339)
+	recentTimestamp := time.Now().UTC().Add(-15 * time.Minute).Format(time.RFC3339)
+
+	if _, err := db.Exec(
+		`INSERT INTO air_quality_records (id, timestamp, co2, rh, temp, pressure) VALUES
+		 (?, ?, ?, ?, ?, ?),
+		 (?, ?, ?, ?, ?, ?)`,
+		"old-record", oldTimestamp, 600, 40.0, 20.0, 1012.0,
+		"recent-record", recentTimestamp, 700, 45.0, 21.0, 1011.0,
+	); err != nil {
+		t.Fatalf("insert records: %v", err)
+	}
+
+	router := newRouter(db, "secret-key")
+
+	req := httptest.NewRequest(http.MethodGet, "/public/records", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+
+	var got []airQualityRecord
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 recent record, got %d", len(got))
+	}
+
+	if got[0].ID != "recent-record" {
+		t.Fatalf("expected recent record, got %+v", got[0])
+	}
+}
+
 func TestPostAirQualityRecordRejectsInvalidPayload(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

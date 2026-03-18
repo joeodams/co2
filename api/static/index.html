@@ -73,27 +73,16 @@
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
-      align-items: end;
+      align-items: center;
     }
 
-    label {
-      display: grid;
-      gap: 4px;
-      min-width: 220px;
-      color: var(--muted);
-      font-size: 0.88rem;
-    }
-
-    input, select, button {
+    button {
       font: inherit;
       border: 1px solid var(--border);
       border-radius: 0;
       padding: 8px 10px;
       background: #ffffff;
       color: var(--ink);
-    }
-
-    button {
       cursor: pointer;
       min-width: 110px;
     }
@@ -228,18 +217,6 @@
       text-align: center;
       color: var(--muted);
     }
-
-    .footer-note {
-      margin-top: 12px;
-      color: var(--muted);
-      font-size: 0.86rem;
-    }
-
-    code {
-      font-family: "Courier New", Courier, monospace;
-      font-size: 0.95em;
-    }
-
     @media (max-width: 720px) {
       main {
         padding: 12px;
@@ -259,24 +236,12 @@
   <main>
     <section class="title-row">
       <h1>CO2 Station</h1>
-      <p>Minimal dashboard for inspecting sensor uploads. Enter the API key, choose a time window, and fetch the latest data from the Go service.</p>
+      <p>Minimal dashboard for inspecting the last 30 days of sensor uploads.</p>
     </section>
 
     <section class="panel controls">
       <div class="control-row">
-        <label>
-          API key
-          <input id="apiKey" type="password" placeholder="Paste X-API-Key">
-        </label>
-        <label style="max-width: 160px;">
-          Window
-          <select id="window">
-            <option value="month">Last 30 days</option>
-            <option value="week">Last 7 days</option>
-            <option value="day">Last 24 hours</option>
-          </select>
-        </label>
-        <button id="loadButton" type="button">Load data</button>
+        <button id="loadButton" type="button">Reload last 30 days</button>
       </div>
       <div class="status" id="statusLine">Status: waiting for a request.</div>
     </section>
@@ -286,8 +251,6 @@
   </main>
 
   <script>
-    const apiKeyInput = document.getElementById("apiKey");
-    const windowInput = document.getElementById("window");
     const loadButton = document.getElementById("loadButton");
     const statusLine = document.getElementById("statusLine");
     const statsContainer = document.getElementById("stats");
@@ -301,38 +264,14 @@
     ];
 
     loadButton.addEventListener("click", loadData);
-    apiKeyInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        loadData();
-      }
-    });
-    renderEmpty("Add your API key and press Load data.");
+    renderEmpty("Loading readings...");
+    loadData();
 
     async function loadData() {
-      const apiKey = apiKeyInput.value.trim();
-      if (!apiKey) {
-        renderEmpty("Add your API key and press Load data.");
-        statsContainer.innerHTML = "";
-        setStatus("Add the API key from the server config first.");
-        return;
-      }
-
-      setStatus("Loading readings...");
-      const endpoint = windowInput.value === "month" ? "/records/last-month" : "/records";
+      setStatus("Loading public readings...");
 
       try {
-        const response = await fetch(endpoint, {
-          headers: {
-            "X-API-Key": apiKey
-          }
-        });
-
-        if (response.status === 401) {
-          renderEmpty("The API key was rejected.");
-          statsContainer.innerHTML = "";
-          setStatus("Unauthorized. Double-check the API key.");
-          return;
-        }
+        const response = await fetch("/public/records");
 
         if (!response.ok) {
           throw new Error("API returned HTTP " + response.status);
@@ -343,7 +282,6 @@
           rows = [];
         }
 
-        rows = filterRowsForWindow(rows, windowInput.value);
         renderDashboard(rows);
         setStatus("Loaded " + rows.length + " readings.");
       } catch (error) {
@@ -351,17 +289,6 @@
         statsContainer.innerHTML = "";
         setStatus(error.message);
       }
-    }
-
-    function filterRowsForWindow(rows, windowValue) {
-      const cutoffMs = {
-        day: 24 * 60 * 60 * 1000,
-        week: 7 * 24 * 60 * 60 * 1000,
-        month: 30 * 24 * 60 * 60 * 1000
-      }[windowValue] || (30 * 24 * 60 * 60 * 1000);
-
-      const cutoff = Date.now() - cutoffMs;
-      return rows.filter((row) => Date.parse(row.timestamp) >= cutoff);
     }
 
     function renderDashboard(rows) {
